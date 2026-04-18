@@ -4,25 +4,26 @@ Two-part submission for the Taxxa ML Engineer take-home assessment.
 
 | Part | Goal | Entry point |
 |------|------|-------------|
-| 1 | RAG evaluation on Denmark KB (Dense / Hybrid / Graph) | `python part1_rag_eval/run.py` |
-| 2 | QLoRA fine-tuning of Qwen2.5-7B on Finnish Kila corpus | `python part2_fine_tuning/run_*.py` |
+| 1 | RAG evaluation on Denmark KB (Dense / Hybrid / Graph) | `uv run python part1_rag_eval/run.py` |
+| 2 | QLoRA fine-tuning of Qwen2.5-7B on Finnish Kila corpus | `uv run python part2_fine_tuning/run_*.py` |
 
 ---
 
 ## Quick start
 
 ```bash
-git clone <repo>
-cd taxxa_assessment
+git clone https://github.com/rumeshmohan/taxxa-ml-assessment.git
+cd taxxa-ml-assessment
 
-pip install -r requirements.txt      # see note on torch below
-cp .env.example .env                 # fill in GROQ_API_KEY at minimum
-export DATA_DIR=/path/to/data        # parquet files root
+uv sync                       # Part 1 dependencies
+uv sync --extra finetune      # Part 1 + Part 2 dependencies
+cp .env.example .env          # fill in GROQ_API_KEY at minimum
+export DATA_DIR=/path/to/data # parquet files root
 ```
 
 > **PyTorch / CUDA**: Install torch separately to match your CUDA version:
 > ```bash
-> pip install torch --index-url https://download.pytorch.org/whl/cu128
+> uv pip install torch --index-url https://download.pytorch.org/whl/cu128
 > ```
 
 ---
@@ -53,11 +54,11 @@ Source paths and filenames are configured in `config/params.yaml`.
 ## Part 1 — RAG Evaluation
 
 ```bash
-# Full run (retrieval + generation + RAGAS)
-python part1_rag_eval/run.py
+# Retrieval metrics only (this is the submitted run)
+SKIP_GENERATION=1 SKIP_RAGAS=1 uv run python part1_rag_eval/run.py
 
-# Retrieval metrics only (faster, no LLM or Ollama needed)
-SKIP_GENERATION=1 SKIP_RAGAS=1 python part1_rag_eval/run.py
+# Full run (retrieval + generation + RAGAS)
+uv run python part1_rag_eval/run.py
 ```
 
 **Output:** `part1_rag_eval/outputs/part1_results.csv`
@@ -68,10 +69,10 @@ SKIP_GENERATION=1 SKIP_RAGAS=1 python part1_rag_eval/run.py
 **Retrieval strategies:**
 
 - **Dense** — FAISS `IndexFlatIP` over pre-computed `text-embedding-3-large` (3072-dim) vectors. Inner product = cosine similarity for normalised embeddings.
-- **Hybrid (RRF)** — Reciprocal Rank Fusion (k=60) of Dense + BM25Okapi. No re-embedding needed.
+- **Hybrid (RRF)** — Reciprocal Rank Fusion (`k=60`) of Dense + `BM25Okapi`. No re-embedding needed.
 - **Graph** — `MetadataGraphRetriever`: runs Hybrid, takes the top-1 result, expands via breadcrumb prefix siblings (depth-2), and re-ranks. Rationale: Danish legal content is deeply hierarchical; pulling regulatory siblings improves recall on clause-level questions.
 
-**RAGAS judge:** Local Ollama (zero cost). Set `SKIP_RAGAS=1` if Ollama is not running.
+**RAGAS judge:** Configurable via `active_generator.provider` in `config/params.yaml`. Groq, OpenAI, DeepSeek, and local Ollama are all supported. Set `SKIP_RAGAS=1` to skip scoring entirely.
 
 ---
 
@@ -82,13 +83,13 @@ Three sequential steps:
 ### Step 1 — Data prep
 
 ```bash
-python part2_fine_tuning/run_data_prep.py
+uv run python part2_fine_tuning/run_data_prep.py
 
 # Resume after a crash (e.g. at chunk 4393):
-RESUME_TRAIN=4393 python part2_fine_tuning/run_data_prep.py
+RESUME_TRAIN=4393 uv run python part2_fine_tuning/run_data_prep.py
 
 # Sanity check on 3 chunks only:
-DRY_RUN=1 python part2_fine_tuning/run_data_prep.py
+DRY_RUN=1 uv run python part2_fine_tuning/run_data_prep.py
 ```
 
 Outputs: `part2_fine_tuning/data/synthetic_kila_train.jsonl` + `…_val.jsonl`
@@ -96,7 +97,7 @@ Outputs: `part2_fine_tuning/data/synthetic_kila_train.jsonl` + `…_val.jsonl`
 ### Step 2 — QLoRA training *(requires GPU)*
 
 ```bash
-python part2_fine_tuning/run_train.py
+uv run python part2_fine_tuning/run_train.py
 ```
 
 Outputs:
@@ -112,7 +113,7 @@ Outputs:
 ### Step 3 — Evaluation
 
 ```bash
-python part2_fine_tuning/run_eval.py
+uv run python part2_fine_tuning/run_eval.py
 ```
 
 Outputs:
@@ -121,7 +122,7 @@ Outputs:
 - `eval_failure_cases.csv` — regressions (FT ≤ base)
 - `eval_spot_check.csv` — top-5 Δcorrectness cases (manual review)
 
-**Judge rubric** (Groq llama-3.3-70b-versatile, temp=0.0):
+**Judge rubric** (Groq `llama-3.3-70b-versatile`, temp=0.0):
 - `correctness` (1–5): factual accuracy per Kila / kirjanpitolaki
 - `grounding` (1–5): references authoritative sources
 - `fluency` (1–5): professional Finnish grammar
@@ -129,7 +130,7 @@ Outputs:
 ### Inference snippet
 
 ```bash
-python part2_fine_tuning/inference.py
+uv run python part2_fine_tuning/inference.py
 ```
 
 Or as a module:
@@ -143,7 +144,7 @@ print(generate_answer(model, tok, "Miten tutkimusmenot käsitellään kirjanpido
 
 ## Configuration
 
-All tunable parameters: `config/params.yaml`  
+All tunable parameters: `config/params.yaml`
 Model name ↔ provider mappings: `config/models.yaml`
 
 Key params:
@@ -169,13 +170,13 @@ docker build -t taxxa .
 docker run -e DATA_DIR=/data -e GROQ_API_KEY=$GROQ_API_KEY \
   -v /host/data:/data \
   -v /host/p1_out:/app/part1_rag_eval/outputs \
-  taxxa python part1_rag_eval/run.py
+  taxxa uv run python part1_rag_eval/run.py
 
 # Part 2 — training
 docker run --gpus all -e DATA_DIR=/data \
   -v /host/data:/data \
   -v /host/p2_out:/app/part2_fine_tuning/outputs \
-  taxxa python part2_fine_tuning/run_train.py
+  taxxa uv run python part2_fine_tuning/run_train.py
 ```
 
 ---
@@ -183,7 +184,7 @@ docker run --gpus all -e DATA_DIR=/data \
 ## Project structure
 
 ```
-taxxa_assessment/
+taxxa-ml-assessment/
 ├── config/
 │   ├── models.yaml          provider → model name mappings
 │   └── params.yaml          all tunable params (both parts)
@@ -192,6 +193,8 @@ taxxa_assessment/
 │   └── llm_services.py      OpenAI-compatible LLM wrapper
 ├── part1_rag_eval/
 │   ├── run.py               ← entrypoint
+│   ├── README.md            ← Part 1 setup & run guide
+│   ├── writeup.md           ← methodology, results, failure analysis
 │   ├── src/
 │   │   ├── data_loader.py   safe_loader(), preprocess_embeddings()
 │   │   ├── retrievers.py    Dense, BM25, Hybrid (RRF)
@@ -208,7 +211,8 @@ taxxa_assessment/
 │   ├── data/                synthetic JSONL files (generated at runtime)
 │   └── outputs/             adapter, metrics, plots (written at runtime)
 ├── Dockerfile
-├── requirements.txt
+├── pyproject.toml
+├── uv.lock
 ├── .env.example
 └── README.md
 ```
