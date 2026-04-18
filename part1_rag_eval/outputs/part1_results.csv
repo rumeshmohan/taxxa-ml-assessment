@@ -1,0 +1,4 @@
+Strategy,Recall@1,Recall@5,Recall@10,nDCG@10,Faithfulness,Answer_Relevancy,p50_latency_sec,p95_latency_sec,cost_per_1k_queries_usd
+Dense,0.0,0.0,0.0,0.0,,,0.71,0.75,0.0026
+Hybrid,0.0,0.0,0.0,0.0,,,0.76,0.79,0.0026
+Graph,0.0,0.0,0.0,0.0,,,0.76,0.79,0.0026
