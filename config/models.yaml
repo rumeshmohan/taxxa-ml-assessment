@@ -1,5 +1,3 @@
-# taxxa_assessment/config/models.yaml
-
 openai:
   chat:
     general: gpt-4o-mini

@@ -2,10 +2,10 @@
 
 Two-part submission for the Taxxa ML Engineer take-home assessment.
 
-| Part | Goal | Entry point |
-|------|------|-------------|
-| 1 | RAG evaluation on Denmark KB (Dense / Hybrid / Graph) | `uv run python part1_rag_eval/run.py` |
-| 2 | QLoRA fine-tuning of Qwen2.5-7B on Finnish Kila corpus | `uv run python part2_fine_tuning/run_*.py` |
+| Part | Goal | Entry point | Write-up |
+|------|------|-------------|----------|
+| 1 | RAG evaluation on Denmark KB (Dense / Hybrid / Graph) | `uv run python part1_rag_eval/run.py` | [`part1_rag_eval/writeup.md`](part1_rag_eval/writeup.md) |
+| 2 | QLoRA fine-tuning of Qwen2.5-7B on Finnish Kila corpus | `uv run python part2_fine_tuning/run_*.py` | [`part2_fine_tuning/writeup.md`](part2_fine_tuning/writeup.md) |
 
 ---
 
@@ -21,10 +21,11 @@ cp .env.example .env          # fill in GROQ_API_KEY at minimum
 export DATA_DIR=/path/to/data # parquet files root
 ```
 
-> **PyTorch / CUDA**: Install torch separately to match your CUDA version:
+> **PyTorch / CUDA (local / non-Docker)**: Install torch separately to match your CUDA version:
 > ```bash
 > uv pip install torch --index-url https://download.pytorch.org/whl/cu128
 > ```
+> When using Docker (SimplePod), this is handled automatically by the NGC base image — no manual torch install needed.
 
 ---
 
@@ -63,8 +64,13 @@ uv run python part1_rag_eval/run.py
 
 **Output:** `part1_rag_eval/outputs/part1_results.csv`
 
-| Strategy | Recall@1 | Recall@5 | Recall@10 | nDCG@10 | Faithfulness | Answer_Relevancy | p50_latency_sec | cost_per_1k_queries_usd |
-|----------|----------|----------|-----------|---------|--------------|------------------|-----------------|--------------------------|
+| Strategy | Recall@1 | Recall@5 | Recall@10 | nDCG@10 | p50_latency_sec | cost_per_1k_queries_usd |
+|----------|----------|----------|-----------|---------|-----------------|--------------------------|
+| Dense    | 0.0      | 0.0      | 0.0       | 0.0     | 0.71s           | ~$0.0026                 |
+| Hybrid   | 0.0      | 0.0      | 0.0       | 0.0     | 0.76s           | ~$0.0026                 |
+| Graph    | 0.0      | 0.0      | 0.0       | 0.0     | 0.76s           | ~$0.0026                 |
+
+> Retrieval-only run. Faithfulness and Answer Relevancy not reported. See `part1_rag_eval/writeup.md` for root cause analysis of 0.0 scores.
 
 **Retrieval strategies:**
 
@@ -77,6 +83,18 @@ uv run python part1_rag_eval/run.py
 ---
 
 ## Part 2 — Fine-Tuning
+
+**Model artifact:** [`rumeshmohan/kila-qwen2.5-7b-adapter`](https://huggingface.co/rumeshmohan/kila-qwen2.5-7b-adapter) *(private — request access)*
+
+**Eval results** (`part2_fine_tuning/outputs/eval_summary.csv`):
+
+| Metric | Base | Fine-Tuned | Delta |
+|--------|------|------------|-------|
+| Correctness | 4.08 | 3.82 | -0.27 |
+| Grounding | 4.33 | 3.91 | -0.42 |
+| Fluency | 4.50 | 4.45 | -0.05 |
+
+> Fine-tuned model regressed slightly. See `part2_fine_tuning/writeup.md` for honest failure analysis.
 
 Three sequential steps:
 
@@ -109,6 +127,7 @@ Outputs:
 - `bf16=True` (not fp16)
 - `gradient_checkpointing_kwargs={"use_reentrant": False}`
 - `optim="paged_adamw_32bit"`
+- `eval_strategy="epoch"` (runs validation each epoch when val set is present)
 
 ### Step 3 — Evaluation
 
@@ -116,27 +135,26 @@ Outputs:
 uv run python part2_fine_tuning/run_eval.py
 ```
 
-Outputs:
-- `eval_summary.csv` — base vs fine-tuned correctness / grounding / fluency (1–5)
-- `eval_answers.csv` — per-question answers from both models
-- `eval_failure_cases.csv` — regressions (FT ≤ base)
-- `eval_spot_check.csv` — top-5 Δcorrectness cases (manual review)
+Output: `part2_fine_tuning/outputs/eval_summary.csv`
 
-**Judge rubric** (Groq `llama-3.3-70b-versatile`, temp=0.0):
-- `correctness` (1–5): factual accuracy per Kila / kirjanpitolaki
-- `grounding` (1–5): references authoritative sources
-- `fluency` (1–5): professional Finnish grammar
+**Judge:** Groq `llama-3.3-70b-versatile` (temp=0.0)  
+**Rubric (1–5):** `correctness` — factual accuracy per Kila / kirjanpitolaki | `grounding` — references authoritative sources | `fluency` — professional Finnish grammar
 
-### Inference snippet
+### Inference
 
 ```bash
 uv run python part2_fine_tuning/inference.py
 ```
 
 Or as a module:
+
 ```python
 from part2_fine_tuning.inference import load_model, generate_answer
-model, tok = load_model()
+
+MODEL_ID = "Qwen/Qwen2.5-7B-Instruct"
+ADAPTER_DIR = "./kila-adapter-output/final_adapter"
+
+model, tok = load_model(MODEL_ID, ADAPTER_DIR)
 print(generate_answer(model, tok, "Miten tutkimusmenot käsitellään kirjanpidossa?"))
 ```
 
@@ -144,10 +162,8 @@ print(generate_answer(model, tok, "Miten tutkimusmenot käsitellään kirjanpido
 
 ## Configuration
 
-All tunable parameters: `config/params.yaml`
+All tunable parameters: `config/params.yaml`  
 Model name ↔ provider mappings: `config/models.yaml`
-
-Key params:
 
 | Key | Default | Description |
 |-----|---------|-------------|
@@ -163,21 +179,31 @@ Key params:
 
 ## Docker
 
+Base image: `nvcr.io/nvidia/pytorch:25.03-py3` (CUDA 12.8 + PyTorch 2.6 + cuDNN 9, Blackwell sm_120 native).
+
 ```bash
 docker build -t taxxa .
 
-# Part 1
+# Part 1 (CPU only — no --gpus needed)
 docker run -e DATA_DIR=/data -e GROQ_API_KEY=$GROQ_API_KEY \
   -v /host/data:/data \
   -v /host/p1_out:/app/part1_rag_eval/outputs \
   taxxa uv run python part1_rag_eval/run.py
 
-# Part 2 — training
+# Part 2 — training (GPU required)
 docker run --gpus all -e DATA_DIR=/data \
   -v /host/data:/data \
   -v /host/p2_out:/app/part2_fine_tuning/outputs \
   taxxa uv run python part2_fine_tuning/run_train.py
+
+# Part 2 — eval
+docker run --gpus all -e DATA_DIR=/data -e GROQ_API_KEY=$GROQ_API_KEY \
+  -v /host/data:/data \
+  -v /host/p2_out:/app/part2_fine_tuning/outputs \
+  taxxa uv run python part2_fine_tuning/run_eval.py
 ```
+
+> **SimplePod (no Docker):** The pod already has the right CUDA environment. Just run `uv sync --extra finetune --no-build-isolation` and execute scripts directly. Shut the pod down between steps to avoid idle billing.
 
 ---
 
@@ -193,7 +219,6 @@ taxxa-ml-assessment/
 │   └── llm_services.py      OpenAI-compatible LLM wrapper
 ├── part1_rag_eval/
 │   ├── run.py               ← entrypoint
-│   ├── README.md            ← Part 1 setup & run guide
 │   ├── writeup.md           ← methodology, results, failure analysis
 │   ├── src/
 │   │   ├── data_loader.py   safe_loader(), preprocess_embeddings()
@@ -205,11 +230,17 @@ taxxa-ml-assessment/
 │   ├── run_data_prep.py     ← Step 1: load → dedupe → split → generate JSONL
 │   ├── run_train.py         ← Step 2: QLoRA fine-tuning
 │   ├── run_eval.py          ← Step 3: base vs FT evaluation
-│   ├── inference.py         ← required inference snippet
+│   ├── inference.py         ← inference snippet
+│   ├── writeup.md           ← methodology, results, failure analysis
 │   ├── src/
 │   │   └── dataset_generator.py  ModelAgnosticDataGenerator
-│   ├── data/                synthetic JSONL files (generated at runtime)
-│   └── outputs/             adapter, metrics, plots (written at runtime)
+│   ├── data/
+│   │   ├── synthetic_kila_train.jsonl
+│   │   ├── synthetic_kila_val.jsonl
+│   │   └── val_doc_ids.json
+│   └── outputs/
+│       ├── eval_summary.csv
+│       └── training_loss_curve.png
 ├── Dockerfile
 ├── pyproject.toml
 ├── uv.lock

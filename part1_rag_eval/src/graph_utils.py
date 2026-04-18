@@ -1,4 +1,3 @@
-# part1_rag_eval/src/graph_utils.py
 from typing import Dict, List, Tuple
 
 import pandas as pd

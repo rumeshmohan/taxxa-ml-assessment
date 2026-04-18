@@ -1,4 +1,3 @@
-# taxxa_assessment/utils/config.py
 import os
 import yaml
 from pathlib import Path
@@ -6,7 +5,6 @@ from typing import Any, Dict
 
 from dotenv import load_dotenv
 
-# Root = taxxa_assessment/ (one level above utils/)
 ROOT_DIR = Path(__file__).parent.parent.absolute()
 
 # DATA_DIR: override with env var when running in a pod with a mounted volume

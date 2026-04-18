@@ -5,7 +5,6 @@ description = "RAG Evaluation & Accounting Model Fine-Tuning — Taxxa ML Engine
 requires-python = ">=3.10"
 
 dependencies = [
-    # ── Shared ────────────────────────────────────────────────────────────────
     "pandas>=2.0.0",
     "numpy>=1.26.0",
     "pyarrow>=14.0.0",
@@ -14,7 +13,6 @@ dependencies = [
     "tqdm>=4.66.0",
     "openai>=1.30.0",
 
-    # ── Part 1: RAG Evaluation ─────────────────────────────────────────────────
     "faiss-cpu>=1.7.4",
     "rank-bm25>=0.2.2",
     "ragas>=0.1.0",
@@ -38,6 +36,7 @@ finetune = [
 
 [tool.uv]
 dev-dependencies = []
+package = false
 
 [build-system]
 requires = ["hatchling"]

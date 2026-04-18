@@ -1,0 +1,112 @@
+# Part 2: Fine-Tuning a Small Accounting Model on Finnish Kila Corpus
+
+## 1. Model & Technique Choice
+
+**Base model:** `Qwen/Qwen2.5-7B-Instruct`
+
+Qwen2.5-7B-Instruct was chosen over Llama-3.1-8B and Mistral-7B for three reasons: it has strong multilingual tokenizer coverage including Finnish morphology, its instruction-tuning is robust out of the box, and its ChatML prompt format (`<|im_start|>` / `<|im_end|>`) is clean and well-documented. Finnish is an agglutinative language with long compound words — a tokenizer that handles it natively reduces sequence length and truncation risk.
+
+**Technique:** QLoRA (4-bit NF4 quantisation via `bitsandbytes`) with LoRA adapters via PEFT, trained using TRL's `SFTTrainer`. This was the right choice given the 32 GB VRAM constraint of the RTX 5090 — full fine-tuning of a 7B model at bf16 would not fit. QLoRA kept peak VRAM well within budget while training only ~0.X% of parameters.
+
+---
+
+## 2. Data Preparation
+
+### Source
+Kila (Kirjanpitolautakunta) corpus: statements (`lausunnot`), exemptions (`poikkeusluvat`), and general guidelines (`yleisohjeet`) in Finnish, loaded from `sources/kila/{date}/chunks_part-*.parquet`.
+
+### Pipeline
+1. **Load & audit** — checked for null `chunk_text`, duplicate `chunk_hash`, and chunk length distribution
+2. **Deduplication** — dropped exact duplicates by `chunk_hash`
+3. **Length filter** — removed chunks shorter than 120 characters (too short to yield meaningful Q&A)
+4. **Document-level train/val split** — 90/10 split by `document_id` (seed=42), not by chunk. This prevents data leakage: chunks from the same document are highly correlated and must not appear in both splits
+5. **Synthetic Q&A generation** — 1–2 Finnish instruction/response pairs per chunk via Groq `llama-3.3-70b-versatile` and `llama-3.1-8b-instant`. The prompt enforced Finnish-only output, grounding strictly in the source chunk, and a hard cap of 2 pairs to prevent hallucinated list repetitions
+6. **Output** — `synthetic_kila_train.jsonl` (~1,878 KB) and `synthetic_kila_val.jsonl` (~233 KB)
+
+### Groq Rate Limit Handling
+The generation loop crashed mid-run at chunk 4393 (train) and chunk 463 (val) due to Groq TPM limits. Resume logic was implemented with a 2.1s per-request delay and a 20s batch pause every 15 chunks. All output was appended to JSONL in place — no data was lost.
+
+### Finnish-Specific Considerations
+Finnish morphology means a single concept can appear in many inflected forms. Rather than translating training data to English (which would lose domain-specific Finnish legal phrasing), training was done entirely in Finnish. The Qwen2.5 tokenizer handles Finnish reasonably well — token length p95 stayed within the 2048 max sequence length with minimal truncation.
+
+---
+
+## 3. Training Configuration
+
+| Parameter | Value |
+|-----------|-------|
+| Base model | `Qwen/Qwen2.5-7B-Instruct` |
+| Quantisation | 4-bit NF4, double quant, bf16 compute |
+| LoRA rank (`r`) | 16 |
+| LoRA alpha | 32 (scale = 2) |
+| LoRA dropout | 0.05 |
+| Target modules | q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj |
+| Epochs | 3 |
+| Batch size | 2 (per device) |
+| Gradient accumulation | 4 (effective batch = 8) |
+| Learning rate | 2e-4 |
+| LR scheduler | cosine |
+| Warmup steps | 10 |
+| Max sequence length | 2048 |
+| Optimizer | paged_adamw_32bit |
+| eval_strategy | epoch |
+| Hardware | NVIDIA RTX 5090 (32 GB VRAM), 1× GPU |
+
+**Blackwell (sm_120) specific settings:**
+- `bf16=True` (not fp16 — required for sm_120 stability)
+- `gradient_checkpointing_kwargs={"use_reentrant": False}` (required on Blackwell, silently breaks without it)
+
+The training loss converged cleanly from ~3.1 at step 0 to ~0.5 by step 2700 with no spikes or divergence.
+
+---
+
+## 4. Evaluation Results
+
+**Judge:** Groq `llama-3.3-70b-versatile` (temp=0.0, JSON mode)
+
+**Rubric (1–5 scale):**
+- `correctness` — factual accuracy per Kila / kirjanpitolaki
+- `grounding` — references authoritative Finnish accounting sources
+- `fluency` — professional Finnish grammar and phrasing
+
+**Evaluation set:** 12 Finnish accounting questions grounded in specific Kila documents
+
+| Metric | Base | Fine-Tuned | Delta |
+|--------|------|------------|-------|
+| Correctness | 4.08 | 3.82 | -0.27 |
+| Grounding | 4.33 | 3.91 | -0.42 |
+| Fluency | 4.50 | 4.45 | -0.05 |
+
+The fine-tuned model scored lower than the base across all three metrics.
+
+---
+
+## 5. Failure Analysis — Why Fine-Tuning Regressed
+
+The loss curve confirms training converged correctly. The regression is not a training failure — it has four root causes:
+
+**1. Strong base model ceiling.** `Qwen2.5-7B-Instruct` already performs well on Finnish and general accounting at baseline (correctness 4.08/5). With such a high starting point, a small corpus like Kila provides insufficient signal to shift the model's priors meaningfully upward.
+
+**2. Synthetic data style drift.** The model was trained on Q&A pairs generated by `llama-3.3-70b-versatile` and `llama-3.1-8b-instant`. That generator produces a specific style — concise, structured Finnish. When the fine-tuned model produces answers in that trained style, the same judge (also `llama-3.3-70b-versatile`) may penalise it for not matching the more elaborate, contextually rich style it would reward in the base model's free-form answers.
+
+**3. Small evaluation set noise.** With only 12 evaluation questions, a delta of -0.27 on correctness corresponds to just 1–2 questions answered worse. This is well within noise for a dataset this size — the result is not statistically conclusive either way.
+
+**4. eval_strategy not set.** `SFTConfig` was initialised without `eval_strategy`, so it defaulted to `"no"` — meaning no validation loss was computed during training despite `eval_dataset` being passed, and early stopping was unavailable. Training ran for all 3 epochs regardless of val performance, risking mild overfitting to the synthetic data distribution. Fixed in the updated code (`eval_strategy="epoch"`).
+
+---
+
+## 6. RAG vs Fine-Tuning — A Judgment Call
+
+After completing this exercise, the honest conclusion is: **RAG would do this job better** for Kila at this data scale. Kila is a small, quasi-legal corpus with authoritative source documents readily available. A well-tuned retriever + the base model with inline citations would outperform fine-tuning on this corpus size, would be easier to update as Kila publishes new statements, and would provide traceable citations — something fine-tuning cannot offer.
+
+Fine-tuning becomes worth it when: (a) the corpus is large enough to shift model priors (tens of thousands of examples), (b) the domain vocabulary is sufficiently out-of-distribution for the base model (e.g., highly specialised Finnish tax code that the base model has never seen), or (c) latency constraints make retrieval impractical.
+
+---
+
+## 7. What I Would Do Next with 10× the Compute Budget
+
+- **DPO on top of SFT** — use the base model outputs as rejected responses and the fine-tuned outputs as chosen (or vice versa where base wins), to explicitly teach preference
+- **Larger synthetic dataset** — generate 3–5 pairs per chunk instead of 1–2, and include negative examples (wrong answers) for contrastive training
+- **BGE-M3 re-ranker** — combine the fine-tuned model with a Finnish-aware retriever for a hybrid RAG + FT setup
+- **Eval set expansion** — 12 questions is too small for reliable conclusions; a 50–100 question eval set would give statistically meaningful deltas
+- **Train/eval on human-written Q&A** — replace synthetic Groq-generated pairs with human-curated examples grounded directly in Kila documents

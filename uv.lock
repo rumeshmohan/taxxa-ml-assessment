@@ -3673,7 +3673,7 @@ wheels = [
 [[package]]
 name = "taxxa-ml-assessment"
 version = "0.1.0"
-source = { editable = "." }
+source = { virtual = "." }
 dependencies = [
     { name = "datasets" },
     { name = "faiss-cpu" },

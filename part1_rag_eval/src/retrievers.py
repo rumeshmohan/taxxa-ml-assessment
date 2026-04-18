@@ -1,4 +1,3 @@
-# part1_rag_eval/src/retrievers.py
 import re
 from typing import List, Tuple
 

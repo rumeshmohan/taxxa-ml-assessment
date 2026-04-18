@@ -1,13 +1,10 @@
-# part1_rag_eval/src/metrics.py
 import math
 from typing import Any, Dict, List
 
 import numpy as np
 
 
-# ---------------------------------------------------------------------------
 # Core metric functions
-# ---------------------------------------------------------------------------
 
 def recall_at_k(retrieved: List[str], ground_truth: List[str], k: int) -> float:
     hits = sum(1 for gid in ground_truth if gid in retrieved[:k])
@@ -27,9 +24,7 @@ def ndcg_at_k(retrieved: List[str], ground_truth: List[str], k: int) -> float:
     return dcg / idcg if idcg > 0 else 0.0
 
 
-# ---------------------------------------------------------------------------
 # Stateful tracker (one per retriever strategy)
-# ---------------------------------------------------------------------------
 
 class EvaluationTracker:
     def __init__(self):
@@ -66,9 +61,7 @@ class EvaluationTracker:
         }
 
 
-# ---------------------------------------------------------------------------
 # RAGAS faithfulness + answer relevancy (local Ollama judge)
-# ---------------------------------------------------------------------------
 
 def evaluate_ragas(
     questions: List[str],

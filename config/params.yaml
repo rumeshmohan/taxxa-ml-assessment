@@ -1,10 +1,7 @@
-# taxxa_assessment/config/params.yaml
 # DATA_DIR env var controls where parquet data is read from (default: ./data)
 # All relative paths below are resolved against DATA_DIR at runtime.
 
-# ---------------------------------------------------------
 # GLOBAL ACTIVE PROVIDERS
-# ---------------------------------------------------------
 active_generator:
   provider: groq          # groq | openai | ollama | deepseek | gemini
   tier: strong            # general | strong | reason
@@ -13,9 +10,7 @@ active_embedding:
   provider: openai
   tier: default
 
-# ---------------------------------------------------------
 # PART 1: RAG EVALUATION
-# ---------------------------------------------------------
 rag:
   top_k: 10
   rrf_k: 60
@@ -33,9 +28,7 @@ rag:
     results_csv: "part1_rag_eval/outputs/part1_results.csv"
     log_file:    "part1_rag_eval/outputs/part1_run.log"
 
-# ---------------------------------------------------------
 # PART 2: FINE-TUNING
-# ---------------------------------------------------------
 finetuning:
   llm_params:
     temperature: 0.3
